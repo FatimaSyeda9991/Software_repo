@@ -1,143 +1,91 @@
 """
-MPU9250 IMU Sensor Test
+MPU9250 IMU Sensor Test - Standard Python Version
 Reads accelerometer, gyroscope, and temperature data from MPU9250
 """
-# libraries
-from machine import I2C, Pin
-import utime
-import ustruct
+
+import time
+import struct
+from smbus2 import SMBus
 
 class SimpleMPU9250:
-    #initializing MPU9250
-    
-    def __init__(self, i2c=None, sda_pin=0, scl_pin=1, freq=100000):
+    def __init__(self, bus_number=7, address=0x68):
+        """Initialize MPU9250 sensor."""
         
-        # Initialize I2C communication
-        if i2c is None:
-            # Create new I2C instance if not provided
-            self.i2c = I2C(0, sda=Pin(sda_pin), scl=Pin(scl_pin), freq=freq)
-        else:
-            # Use provided I2C instance
-            self.i2c = i2c
-        
-        # MPU9250 I2C address (0x68 or 0x69 depending on AD0 pin)
-        self.addr = 0x68
+        # Initialize I2C bus
+        self.bus = SMBus(bus_number)
+        self.addr = address
         
         # Wake up the device by writing 0 to PWR_MGMT_1 register (0x6B)
-        # This clears the sleep bit and starts the sensor
-        self.i2c.writeto_mem(self.addr, 0x6B, b'\x00')
-        utime.sleep_ms(100)  # Wait for sensor to stabilize
+        self.bus.write_byte_data(self.addr, 0x6B, 0x00)
+        time.sleep(0.1)  # Wait for sensor to stabilize
         
         print("✓ Simple MPU9250 initialized successfully")
+        print(f"  I2C Bus: {bus_number}")
         print(f"  I2C Address: 0x{self.addr:02x}")
-        print(f"  I2C Frequency: {freq} Hz")
     
     def get_all_data(self):
         """
         Read all available sensor data from MPU9250
-        Returns:
-            Dictionary containing:
-            - accel: Tuple of (X, Y, Z) acceleration in m/s²
-            - gyro: Tuple of (X, Y, Z) angular velocity in rad/s  
-            - temp: Temperature in Celsius
-            - mag: Tuple of (X, Y, Z) magnetic field in µT (not implemented)
+        Returns dictionary with sensor data.
         """
-        
         # Read 14 bytes starting from ACCEL_XOUT_H register (0x3B)
-        # This reads: Accelerometer (6 bytes) + Temperature (2 bytes) + Gyroscope (6 bytes)
-        data = self.i2c.readfrom_mem(self.addr, 0x3B, 14)
-        
-        # ===========================================================================
-        # ACCELEROMETER DATA PROCESSING
-        # ===========================================================================
-        # Raw accelerometer data is 16-bit signed integers
-        # Scale factor: ±8g (can measure from -8g to +8g) 16g range, range = 4096 LSB/g
-        # Convert to m/s² by multiplying by 9.80665 (standard gravity)
+        data = self.bus.read_i2c_block_data(self.addr, 0x3B, 14)
         
         # Convert raw bytes to acceleration values in m/s²
-        ax = self._convert(data[0], data[1]) / 4096.0 * 9.80665  # X-axis acceleration
-        ay = self._convert(data[2], data[3]) / 4096.0 * 9.80665  # Y-axis acceleration  
-        az = self._convert(data[4], data[5]) / 4096.0 * 9.80665  # Z-axis acceleration
-        
-        # Also calculate magnitude of acceleration vector
+        ax = self._convert(data[0], data[1]) / 4096.0 * 9.80665
+        ay = self._convert(data[2], data[3]) / 4096.0 * 9.80665  
+        az = self._convert(data[4], data[5]) / 4096.0 * 9.80665
         accel_magnitude = (ax**2 + ay**2 + az**2)**0.5
         
-        # ===========================================================================
-        # TEMPERATURE DATA PROCESSING  
-        # ===========================================================================
-        # Temperature sensor data conversion:
-        # Formula: Temperature = (TEMP_OUT / 333.87) + 21.0
-        # This converts raw sensor reading to Celsius
+        # Temperature conversion
         temp = self._convert(data[6], data[7]) / 333.87 + 21.0
         
-        # ===========================================================================
-        # GYROSCOPE DATA PROCESSING
-        # ===========================================================================
-        # Raw gyroscope data is 16-bit signed integers
-        # Scale factor: ±1000dps range = 32.8 LSB/°/s
-        # Convert to rad/s by multiplying by 0.0174533 (degrees to radians)
-        
         # Convert raw bytes to angular velocity in rad/s
-        gx = self._convert(data[8], data[9]) / 32.8 * 0.0174533   # X-axis rotation
-        gy = self._convert(data[10], data[11]) / 32.8 * 0.0174533 # Y-axis rotation
-        gz = self._convert(data[12], data[13]) / 32.8 * 0.0174533 # Z-axis rotation
-        
-        # Also calculate magnitude of gyroscope vector
+        gx = self._convert(data[8], data[9]) / 32.8 * 0.0174533
+        gy = self._convert(data[10], data[11]) / 32.8 * 0.0174533
+        gz = self._convert(data[12], data[13]) / 32.8 * 0.0174533
         gyro_magnitude = (gx**2 + gy**2 + gz**2)**0.5
         
         return {
-            'accel': (ax, ay, az),                    # Linear acceleration (m/s²)
-            'accel_magnitude': accel_magnitude,       # Total acceleration magnitude
-            'gyro': (gx, gy, gz),                     # Angular velocity (rad/s)
-            'gyro_magnitude': gyro_magnitude,         # Total rotation magnitude
-            'temp': temp,                             # Temperature (°C)
-            'mag': (0, 0, 0)                          # Magnetometer data (not implemented)
+            'accel': (ax, ay, az),
+            'accel_magnitude': accel_magnitude,
+            'gyro': (gx, gy, gz),
+            'gyro_magnitude': gyro_magnitude,
+            'temp': temp,
+            'mag': (0, 0, 0)  # Magnetometer not implemented in simple version
         }
     
     def _convert(self, high, low):
-        """
-        Convert two bytes to signed 16-bit integer
-        
-        Args:
-            high: High byte of the 16-bit value
-            low: Low byte of the 16-bit value
-            
-        Returns:
-            Signed 16-bit integer value
-        """
-        # Combine two bytes into 16-bit value
+        """Convert two bytes to signed 16-bit integer."""
         value = (high << 8) | low
-        
-        # Convert from unsigned to signed 16-bit integer
-        if value >= 32768:  # If value is negative (two's complement)
-            value -= 65536   # Convert to signed integer
-            
+        if value >= 32768:
+            value -= 65536
         return value
+    
+    def close(self):
+        """Close I2C bus."""
+        self.bus.close()
 
 # ===========================================================================
 # MAIN TEST PROGRAM
 # ===========================================================================
 print("\n" + "="*70)
-print("MPU9250 IMU SENSOR COMPREHENSIVE TEST")
+print("MPU9250 IMU SENSOR TEST - STANDARD PYTHON")
 print("="*70)
-print("Sensor: MPU9250 9-Axis IMU (Accelerometer + Gyroscope + Magnetometer)")
+print("Sensor: MPU9250 9-Axis IMU")
 print("Interface: I2C")
+print("Bus: 7")
 print("Address: 0x68")
-print("Wiring: SDA→GP0, SCL→GP1, VCC→3.3V, GND→GND")
 print("="*70)
 
 try:
     # Initialize the MPU9250 sensor
     print("\nInitializing sensor...")
-    mpu = SimpleMPU9250(sda_pin=0, scl_pin=1, freq=100000)
+    mpu = SimpleMPU9250(bus_number=7)
     
     print("\n" + "="*70)
     print("STARTING CONTINUOUS SENSOR READINGS")
     print("="*70)
-    print("Expected values when stationary:")
-    print("  - Acceleration: ~9.8 m/s² on axis pointing downward (gravity)")
-    print("  - Gyroscope: ~0 rad/s (no rotation)")
-    print("  - Temperature: ~20-40°C (ambient to operating temp)")
     print("Press Ctrl+C to stop reading")
     print("="*70)
     
@@ -164,34 +112,31 @@ try:
         gyro_x, gyro_y, gyro_z = data['gyro']
         gyro_mag = data['gyro_magnitude']
         
-        # Display formatted output with all sensor values
+        # Display formatted output
         print("{:<6} {:<8.1f} {:<12.3f} {:<12.3f} {:<12.3f} {:<12.3f} {:<12.3f} {:<12.3f} {:<12.3f} {:<12.3f}".format(
             count, temp, accel_x, accel_y, accel_z, accel_mag, gyro_x, gyro_y, gyro_z, gyro_mag
         ))
         
-        # Brief pause between readings (1 second interval)
-        utime.sleep(1)
+        time.sleep(1)
         
 except KeyboardInterrupt:
-    # Handle graceful shutdown when user presses Ctrl+C
     print("\n" + "="*70)
     print("TEST STOPPED BY USER")
     print("="*70)
     print(f"Total readings: {count}")
-    print("Sensor shutdown complete")
+    mpu.close()
     
 except Exception as e:
-    # Handle any other errors
     print("\n" + "="*70)
     print("ERROR OCCURRED")
     print("="*70)
     print(f"Error type: {type(e).__name__}")
     print(f"Error message: {e}")
     print("\nTroubleshooting tips:")
-    print("1. Check wiring: SDA→GP0, SCL→GP1, VCC→3.3V, GND→GND")
-    print("2. Verify I2C pull-up resistors (4.7kΩ recommended)")
-    print("3. Ensure MPU9250 is properly powered")
-    print("4. Check for I2C address conflicts")
+    print("1. Check I2C wiring and connections")
+    print("2. Verify sensor is powered (3.3V)")
+    print("3. Check if I2C device is detected: sudo i2cdetect -y 7")
+    print("4. Ensure smbus2 is installed: pip3 install smbus2")
 
 # Final message
 print("\n" + "="*70)
